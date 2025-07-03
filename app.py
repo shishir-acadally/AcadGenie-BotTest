@@ -413,8 +413,136 @@ def render_feedback_popup(message_index: int):
         
         st.markdown("</div>", unsafe_allow_html=True)
 
+# def render_feedback_buttons(message_index: int):
+#     """Render thumbs up, thumbs down, and save buttons for a message."""
+#     # Check if this message feedback is locked
+#     is_locked = message_index in st.session_state.feedback_locked
+    
+#     if is_locked:
+#         # Show locked feedback state
+#         col1, col2 = st.columns([10, 2])
+#         with col2:
+#             # Get the saved feedback type from feedback_data
+#             # Find corresponding feedback in the data
+#             memory = st.session_state.feedback_data[1]['memory']
+#             ai_message_count = 0
+#             for i in range(message_index + 1):
+#                 if i < len(st.session_state.chat_history):
+#                     sender, _ = st.session_state.chat_history[i]
+#                     if sender == "AcadGenie":
+#                         ai_message_count += 1
+            
+#             # Find the feedback type
+#             feedback_type = None
+#             ai_messages_found = 0
+#             for i in range(len(memory)):
+#                 msg = memory[i]
+#                 if msg.get("type") == "AIMessage":
+#                     ai_messages_found += 1
+#                     if ai_messages_found == ai_message_count:
+#                         feedback_type = msg.get("feedback_type")
+#                         break
+            
+#             if feedback_type == "thumbs_up":
+#                 st.markdown("✅ 👍")
+#             elif feedback_type == "thumbs_down":
+#                 st.markdown("✅ 👎")
+#     else:
+#         # Show interactive feedback buttons
+#         current_selection = st.session_state.pending_feedback_save.get(message_index, {})
+#         feedback_type = current_selection.get("type")
+        
+#         col1, col2, col3, col4 = st.columns([8, 1, 1, 2])
+        
+#         # Determine if feedback has been selected for this message
+#         feedback_selected = feedback_type is not None
+        
+#         with col2:
+#             # Thumbs up button
+#             thumbs_up_pressed = st.button(
+#                 "👍", 
+#                 key=f"thumbs_up_{message_index}", 
+#                 help="This response was helpful"
+#             )
+#             if thumbs_up_pressed:
+#                 set_temp_feedback(message_index, "thumbs_up")
+#                 # Close any open popup
+#                 st.session_state.show_feedback_popup = False
+#                 st.session_state.current_feedback_index = -1
+#                 st.rerun()
+        
+#         with col3:
+#             # Thumbs down button
+#             thumbs_down_pressed = st.button(
+#                 "👎", 
+#                 key=f"thumbs_down_{message_index}", 
+#                 help="This response needs improvement"
+#             )
+#             if thumbs_down_pressed:
+#                 # Toggle popup for this specific message
+#                 if (st.session_state.show_feedback_popup and 
+#                     st.session_state.current_feedback_index == message_index):
+#                     # Close popup if it's already open for this message
+#                     st.session_state.show_feedback_popup = False
+#                     st.session_state.current_feedback_index = -1
+#                 else:
+#                     # Open popup for this message
+#                     st.session_state.show_feedback_popup = True
+#                     st.session_state.current_feedback_index = message_index
+#                     # Initialize thumbs down feedback if not already set
+#                     if feedback_type != "thumbs_down":
+#                         set_temp_feedback(message_index, "thumbs_down", "")
+#                 st.rerun()
+        
+#         with col4:
+#             save_pressed = st.button(
+#                 "💾 Save", 
+#                 key=f"save_feedback_{message_index}",
+#                 disabled=not feedback_selected,
+#                 type="primary" if feedback_selected else "secondary"
+#             )
+#             if save_pressed and feedback_selected:
+#                 # For thumbs down, ensure reason is provided
+#                 if (feedback_type == "thumbs_down" and 
+#                     not current_selection.get("reason", "").strip()):
+#                     st.error("Please provide a reason for thumbs down feedback.")
+#                 else:
+#                     save_feedback_session(message_index)
+#                     # Close popup after saving
+#                     st.session_state.show_feedback_popup = False
+#                     st.session_state.current_feedback_index = -1
+#                     st.success("Feedback saved successfully!")
+#                     st.rerun()
+        
+#         # Show current selection with visual indicators
+#         if feedback_selected:
+#             with col1:
+#                 if feedback_type == "thumbs_up":
+#                     st.markdown("**🔵 Selected:** 👍 Helpful")
+#                 elif feedback_type == "thumbs_down":
+#                     reason = current_selection.get("reason", "")
+#                     if reason:
+#                         st.markdown(f"**🔵 Selected:** 👎 Needs improvement - {reason}...")
+#                     else:
+#                         st.markdown("**🔵 Selected:** 👎 Needs improvement (please add reason)")
+        
+#         # Render the feedback popup RIGHT HERE if it should be shown for this message
+#         if (st.session_state.show_feedback_popup and 
+#             st.session_state.current_feedback_index == message_index):
+#             render_feedback_popup(message_index)
+
 def render_feedback_buttons(message_index: int):
     """Render thumbs up, thumbs down, and save buttons for a message."""
+    
+    # Find the index of the most recent AI message
+    most_recent_ai_index = -1
+    for i in range(len(st.session_state.chat_history) - 1, -1, -1):
+        if i < len(st.session_state.chat_history):
+            sender, _ = st.session_state.chat_history[i]
+            if sender == "AcadGenie":
+                most_recent_ai_index = i
+                break
+    
     # Check if this message feedback is locked
     is_locked = message_index in st.session_state.feedback_locked
     
@@ -435,7 +563,7 @@ def render_feedback_buttons(message_index: int):
             # Find the feedback type
             feedback_type = None
             ai_messages_found = 0
-            for i in range(len(memory) - 1, -1, -1):
+            for i in range(len(memory)):
                 msg = memory[i]
                 if msg.get("type") == "AIMessage":
                     ai_messages_found += 1
@@ -447,8 +575,8 @@ def render_feedback_buttons(message_index: int):
                 st.markdown("✅ 👍")
             elif feedback_type == "thumbs_down":
                 st.markdown("✅ 👎")
-    else:
-        # Show interactive feedback buttons
+    elif message_index == most_recent_ai_index:
+        # Only show interactive feedback buttons for the most recent AI message
         current_selection = st.session_state.pending_feedback_save.get(message_index, {})
         feedback_type = current_selection.get("type")
         
@@ -522,7 +650,7 @@ def render_feedback_buttons(message_index: int):
                 elif feedback_type == "thumbs_down":
                     reason = current_selection.get("reason", "")
                     if reason:
-                        st.markdown(f"**🔵 Selected:** 👎 Needs improvement - {reason[:50]}...")
+                        st.markdown(f"**🔵 Selected:** 👎 Needs improvement - {reason}...")
                     else:
                         st.markdown("**🔵 Selected:** 👎 Needs improvement (please add reason)")
         
@@ -530,7 +658,8 @@ def render_feedback_buttons(message_index: int):
         if (st.session_state.show_feedback_popup and 
             st.session_state.current_feedback_index == message_index):
             render_feedback_popup(message_index)
-
+    # If it's not the most recent AI message and not locked, don't show anything
+    
 def render_name_input():
     """Render the name input page."""
     st.title("🤖 AcadGenie")
