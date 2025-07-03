@@ -14,9 +14,78 @@ from langchain_core.runnables import RunnableConfig
 from datetime import datetime
 from pymongo import MongoClient
 import os
-
+from dotenv import load_dotenv
 load_dotenv()
-sys = os.environ.get("SYS_PROMPT")
+sys = """
+You are AcadGenie, an expert academic assistant specializing in teaching through highly interactive, guided practice. Your role is to guide learners through complex concepts by breaking them down into small, manageable steps and using a variety of interactive prompts such as multiple-choice questions (MCQs), fill-in-the-blanks (FIBs), and short answers. You do not solve problems outright but help learners solve them through their own thinking, rooted in Socratic questioning, error analysis, and constructivist learning. You adjust the complexity of your responses based on the learner’s grade level and focus on fostering true conceptual clarity and real-world application.
+
+Interaction Flow
+Evaluate User Input:
+	- If the user's input is not a question, engage in normal conversation: be helpful, supportive, and contextually appropriate.
+	- If the user's input is a question, decompose it into sequential sub-problems or steps (e.g. identifying inputs and methods to use, recalling formulas, applying formulas, etc.).
+	
+Handling Complex Questions:
+	- For each step, generate an interactive Multiple Choice Question(MCQ) to guide the learner:
+	- Always include plausible options with distractor rationales (DRs) to address common misconceptions.
+    - These question stem of MCQs can be of multiple forms like "Fill in the blank", "Short Answer", etc.
+    - Vary the question type across steps to avoid repetition (e.g., don’t use same type of MCQs multiple times for similar steps).
+    - Each step question should be in a flow that builds on the previous one, guiding the learner through the concept step by step. One such flow could be: identifying the inputs(if it is not given diretly), recalling the formula, applying the formula, and interpreting the results.
+    - If multiple steps are similar to each-other, try combining them into one question.
+    
+Managing User Responses:
+	If the learner answers correctly:
+		- Confirm the step with specific feedback tied to conceptual clarity (e.g., “That’s right! You’ve correctly identified the formula.”).
+		- Proceed to the next step with a new interactive prompt.
+	If the learner answers incorrectly:
+		On the first wrong attempt:
+		- Identify the specific misconception using the format: "It seems you are confusing [concept A] with [concept B]."
+		- Provide a hint or conceptual remedy and ask a follow-up question in a simpler way.
+		On the second wrong attempt:
+		- Reveal the correct answer with a detailed explanation, including why incorrect options (for MCQs) are wrong based on distractor rationales.
+	Always guide the learner to think through each step; do not solve it for them.
+
+Completing the Concept:
+	- Once all steps are completed and understanding is confirmed, ask: "Would you like to explore another question?"
+	- If yes, start again with a new question.
+
+Tone and Style
+	- Warm, supportive, and highly pedagogical, like a patient, chalk-and-talk tutor sitting beside the learner.
+	- Use simple language, clear examples, and lots of reinforcement.
+	- Foster true conceptual clarity and real-world application.
+	- Avoid filler praise (e.g., “Great!”) unless tied to specific understanding.
+
+Output Format
+Make sure all the outputs follow below given output structure:
+-When there is not question data, output question_data as empty object e.g. "question_data": { }
+```json
+{
+  "conversation_message": "Your instructional or feedback message here.",
+  "question_data": {
+    "question": "Your question here?",
+    "options": [
+      {"option": "A", "text": "Option A text", "DR": "common misconception"},
+      {"option": "B", "text": "Option B text", "DR": "common misconception"},
+      {"option": "C", "text": "Option C text", "DR": "common misconception"},
+      {"option": "D", "text": "Option D text", "DR": "common misconception"}
+    ],
+    "correct_answer": "correct option among all 4 options",
+    "explanation": "Why the correct answer is correct and others are not.",
+    "comment": "Encouraging or clarifying comment tied to understanding.",
+  },
+  "completed":"True/False according to whether the current question has been completely resolved."
+
+}
+```
+
+Important Notes
+    - Always break down a question based on the learner's grade level.
+	- Adjust the complexity of responses based on the learner's grade level.
+	- Do not repeat the same type of question multiple times for similar steps.
+	- Do not solve any step for the learner; always guide them to think through it.
+	- Provide feedback that is specific and tied to conceptual clarity.
+	- Never rush to solve the full problem; focus on one step at a time.
+"""
+
 
 # Define the add_messages function for TypedDict annotation
 def add_messages(left: list, right: list) -> list:
@@ -39,7 +108,8 @@ def initialize_agent_state() -> State:
 def push_feedback_data():
     """Push feedback data to database."""
     try:
-        client = MongoClient(os.environ["db_uri"])
+        uri = os.environ["db_uri"]
+        client = MongoClient(uri)
         db = client[os.environ["db_name"]]
         collection = db[os.environ["collection_name"]]
         feedback = {'session_info':st.session_state.feedback_data[0], 'history':st.session_state.feedback_data[1]['memory']}
@@ -102,8 +172,8 @@ def get_agent_response(user_input: str, config: dict) -> dict:
         # Create agent if not exists
         if "agent" not in st.session_state:
             model = ChatOpenAI(
-                model="gpt-4",
-                temperature=0.3,
+                model="o3",
+                # temperature=0.3,
                 api_key=os.environ["OPENAI_API_KEY"]
             )
             checkpointer = InMemorySaver()
@@ -219,10 +289,10 @@ def initialize_session_state():
         "feedback_data": [],  # Will be properly initialized by initialize_feedback_data()
         "show_feedback_popup": False,
         "current_feedback_index": -1,
-        "pending_feedback": False,
         "feedback_locked": [],
         "temp_feedback": {"type": None, "reason": ""},
-        "show_feedback_summary": False
+        "show_feedback_summary": False,
+        "pending_feedback_save": {}  # Track which messages have unsaved feedback
     }
     
     for key, default_value in defaults.items():
@@ -230,44 +300,58 @@ def initialize_session_state():
             st.session_state[key] = default_value
    
 
-def save_feedback_session():
-    """Update the most recent AI message with feedback."""
+def save_feedback_session(message_index: int):
+    """Update the specific AI message with feedback."""
     if not st.session_state.feedback_data or len(st.session_state.feedback_data) < 2:
         print("Warning: feedback_data not properly initialized")
         return
+    print("\n\n\nSave Feedback method called.....\n\n\n")
+    # Get the feedback for this specific message
+    feedback_info = st.session_state.pending_feedback_save.get(message_index, {})
+    feedback_type = feedback_info.get("type")
+    feedback_reason = feedback_info.get("reason", "")
     
-    # Find the most recent AI message in feedback_data and update it
+    if not feedback_type:
+        return
+    
+    # We need to map the chat history index to the feedback_data index
     memory = st.session_state.feedback_data[1]['memory']
     
-    # Find the last AI message that doesn't have feedback yet
+    # Find the corresponding AI message in memory (counting backwards from the end)
     for i in range(len(memory) - 1, -1, -1):
         msg = memory[i]
-        if (msg.get("type") == "AIMessage" and 
-            msg.get("feedback_type") is None):
-            
+        if msg.get("type") == "AIMessage":
             # Update this message with feedback
-            msg["feedback_type"] = st.session_state.temp_feedback["type"]
-            msg["feedback_reason"] = st.session_state.temp_feedback["reason"]
+            msg["feedback_type"] = feedback_type
+            msg["feedback_reason"] = feedback_reason
             
-            print(f"Updated feedback for AI message at index {i}")
+            print(f"Updated feedback for AI message at memory index {i}")
             print(f"Feedback type: {msg['feedback_type']}")
             print(f"Feedback reason: {msg['feedback_reason']}")
             break
     else:
-        print("Warning: No AI message found to update with feedback")
+        print("Warning: No corresponding AI message found in feedback_data")
     
-    # Reset temporary feedback
-    st.session_state.temp_feedback = {"type": None, "reason": ""}
-    st.session_state.pending_feedback = False
+    # Remove from pending feedback save
+    if message_index in st.session_state.pending_feedback_save:
+        del st.session_state.pending_feedback_save[message_index]
     
-    print(f"Feedback session updated. Total messages in feedback_data: {len(memory)}")
+    # Add to locked feedback
+    if message_index not in st.session_state.feedback_locked:
+        st.session_state.feedback_locked.append(message_index)
+    
+    print(f"Feedback session updated for message {message_index}. Total messages in feedback_data: {len(memory)}")
 
-def set_temp_feedback(feedback_type: str, reason: str = ""):
-    """Set temporary feedback before saving."""
-    st.session_state.temp_feedback = {
+def set_temp_feedback(message_index: int, feedback_type: str, reason: str = ""):
+    """Set temporary feedback for a specific message."""
+    st.session_state.pending_feedback_save[message_index] = {
         "type": feedback_type,
         "reason": reason
     }
+
+def has_unsaved_feedback():
+    """Check if there are any unsaved feedback selections."""
+    return len(st.session_state.pending_feedback_save) > 0
 
 def render_feedback_popup(message_index: int):
     """Render the feedback popup for thumbs down positioned below the buttons."""
@@ -287,13 +371,17 @@ def render_feedback_popup(message_index: int):
         st.markdown("### 👎 Help us improve")
         st.markdown("Please tell us what went wrong:")
         
+        # Get current reason if any
+        current_feedback = st.session_state.pending_feedback_save.get(message_index, {})
+        current_reason = current_feedback.get("reason", "")
+        
         # Feedback form
         with st.form(f"feedback_form_{message_index}", clear_on_submit=False):
             reason = st.text_area(
                 "Reason for thumbs down:",
                 placeholder="e.g., Incorrect information, Not helpful, Confusing explanation...",
                 height=100,
-                value=st.session_state.temp_feedback.get("reason", ""),
+                value=current_reason,
                 key=f"feedback_reason_{message_index}"
             )
             
@@ -306,13 +394,19 @@ def render_feedback_popup(message_index: int):
                 cancelled = st.form_submit_button("Cancel")
             
             if submitted:
-                set_temp_feedback("thumbs_down", reason)
-                st.session_state.show_feedback_popup = False
-                st.session_state.current_feedback_index = -1
-                st.success("Feedback recorded! Click 'Save' to finalize.")
-                st.rerun()
+                if reason.strip():  # Ensure reason is provided for thumbs down
+                    set_temp_feedback(message_index, "thumbs_down", reason.strip())
+                    st.session_state.show_feedback_popup = False
+                    st.session_state.current_feedback_index = -1
+                    st.success("Feedback recorded! Click 'Save' to finalize.")
+                    st.rerun()
+                else:
+                    st.error("Please provide a reason for the thumbs down feedback.")
             
             if cancelled:
+                # Remove any pending feedback for this message
+                if message_index in st.session_state.pending_feedback_save:
+                    del st.session_state.pending_feedback_save[message_index]
                 st.session_state.show_feedback_popup = False
                 st.session_state.current_feedback_index = -1
                 st.rerun()
@@ -321,16 +415,6 @@ def render_feedback_popup(message_index: int):
 
 def render_feedback_buttons(message_index: int):
     """Render thumbs up, thumbs down, and save buttons for a message."""
-    # Only show feedback buttons for the most recent AI message if feedback is pending
-    is_most_recent_ai = False
-    if st.session_state.chat_history:
-        # Find the most recent AI message
-        for i in range(len(st.session_state.chat_history) - 1, -1, -1):
-            sender, _ = st.session_state.chat_history[i]
-            if sender == "AcadGenie":
-                is_most_recent_ai = (i == message_index)
-                break
-    
     # Check if this message feedback is locked
     is_locked = message_index in st.session_state.feedback_locked
     
@@ -338,21 +422,40 @@ def render_feedback_buttons(message_index: int):
         # Show locked feedback state
         col1, col2 = st.columns([10, 2])
         with col2:
-            # Get feedback type from locked feedback (you might want to store this differently)
-            feedback_type = st.session_state.temp_feedback.get("type")  # This might not work as expected
+            # Get the saved feedback type from feedback_data
+            # Find corresponding feedback in the data
+            memory = st.session_state.feedback_data[1]['memory']
+            ai_message_count = 0
+            for i in range(message_index + 1):
+                if i < len(st.session_state.chat_history):
+                    sender, _ = st.session_state.chat_history[i]
+                    if sender == "AcadGenie":
+                        ai_message_count += 1
+            
+            # Find the feedback type
+            feedback_type = None
+            ai_messages_found = 0
+            for i in range(len(memory) - 1, -1, -1):
+                msg = memory[i]
+                if msg.get("type") == "AIMessage":
+                    ai_messages_found += 1
+                    if ai_messages_found == ai_message_count:
+                        feedback_type = msg.get("feedback_type")
+                        break
             
             if feedback_type == "thumbs_up":
                 st.markdown("✅ 👍")
             elif feedback_type == "thumbs_down":
                 st.markdown("✅ 👎")
-    elif is_most_recent_ai and st.session_state.pending_feedback:
-        # Show interactive feedback buttons only for the most recent AI message when feedback is pending
-        current_selection = st.session_state.temp_feedback["type"]
+    else:
+        # Show interactive feedback buttons
+        current_selection = st.session_state.pending_feedback_save.get(message_index, {})
+        feedback_type = current_selection.get("type")
         
         col1, col2, col3, col4 = st.columns([8, 1, 1, 2])
         
-        # Determine if feedback has been selected
-        feedback_selected = current_selection is not None
+        # Determine if feedback has been selected for this message
+        feedback_selected = feedback_type is not None
         
         with col2:
             # Thumbs up button
@@ -362,7 +465,7 @@ def render_feedback_buttons(message_index: int):
                 help="This response was helpful"
             )
             if thumbs_up_pressed:
-                set_temp_feedback("thumbs_up")
+                set_temp_feedback(message_index, "thumbs_up")
                 # Close any open popup
                 st.session_state.show_feedback_popup = False
                 st.session_state.current_feedback_index = -1
@@ -386,7 +489,9 @@ def render_feedback_buttons(message_index: int):
                     # Open popup for this message
                     st.session_state.show_feedback_popup = True
                     st.session_state.current_feedback_index = message_index
-                    set_temp_feedback("thumbs_down", "")  # Reset reason for new selection
+                    # Initialize thumbs down feedback if not already set
+                    if feedback_type != "thumbs_down":
+                        set_temp_feedback(message_index, "thumbs_down", "")
                 st.rerun()
         
         with col4:
@@ -397,25 +502,29 @@ def render_feedback_buttons(message_index: int):
                 type="primary" if feedback_selected else "secondary"
             )
             if save_pressed and feedback_selected:
-                save_feedback_session()
-                st.session_state.feedback_locked.append(message_index)
-                # Close popup after saving
-                st.session_state.show_feedback_popup = False
-                st.session_state.current_feedback_index = -1
-                st.success("Feedback saved successfully!")
-                st.rerun()
+                # For thumbs down, ensure reason is provided
+                if (feedback_type == "thumbs_down" and 
+                    not current_selection.get("reason", "").strip()):
+                    st.error("Please provide a reason for thumbs down feedback.")
+                else:
+                    save_feedback_session(message_index)
+                    # Close popup after saving
+                    st.session_state.show_feedback_popup = False
+                    st.session_state.current_feedback_index = -1
+                    st.success("Feedback saved successfully!")
+                    st.rerun()
         
         # Show current selection with visual indicators
         if feedback_selected:
             with col1:
-                if current_selection == "thumbs_up":
+                if feedback_type == "thumbs_up":
                     st.markdown("**🔵 Selected:** 👍 Helpful")
-                elif current_selection == "thumbs_down":
-                    reason = st.session_state.temp_feedback.get("reason", "")
+                elif feedback_type == "thumbs_down":
+                    reason = current_selection.get("reason", "")
                     if reason:
                         st.markdown(f"**🔵 Selected:** 👎 Needs improvement - {reason[:50]}...")
                     else:
-                        st.markdown("**🔵 Selected:** 👎 Needs improvement (click 👎 again to add reason)")
+                        st.markdown("**🔵 Selected:** 👎 Needs improvement (please add reason)")
         
         # Render the feedback popup RIGHT HERE if it should be shown for this message
         if (st.session_state.show_feedback_popup and 
@@ -479,8 +588,7 @@ def render_chat_interface():
             st.session_state.agent_memory = []
             st.session_state.feedback_locked = []
             st.session_state.feedback_data = []
-            st.session_state.pending_feedback = False
-            st.session_state.temp_feedback = {"type": None, "reason": ""}
+            st.session_state.pending_feedback_save = {}
             st.rerun()
             
     with col3:
@@ -489,8 +597,7 @@ def render_chat_interface():
             st.session_state.agent_memory = []
             st.session_state.feedback_data = []
             st.session_state.feedback_locked = []
-            st.session_state.pending_feedback = False
-            st.session_state.temp_feedback = {"type": None, "reason": ""}
+            st.session_state.pending_feedback_save = {}
             st.rerun()
     with col4:
         if st.button("Start Over", type="secondary"):
@@ -508,12 +615,12 @@ def render_chat_interface():
         }
     }
     
-    # Chat input - only allow if no pending feedback
-    if not st.session_state.pending_feedback:
-        user_input = st.chat_input("Type your message here...")
-    else:
-        st.chat_input("Please provide feedback on the previous response before continuing...", disabled=True)
-        user_input = None
+    # Check for unsaved feedback and show warning
+    if has_unsaved_feedback():
+        st.warning("⚠️ You have unsaved feedback. Please save your feedback before it gets lost, or continue chatting without saving.")
+    
+    # Chat input - always enabled now (feedback is optional)
+    user_input = st.chat_input("Type your message here...")
     
     if user_input:
         # Add user message to display history
@@ -534,13 +641,9 @@ def render_chat_interface():
                 # Add to display history
                 st.session_state.chat_history.append(("AcadGenie", formatted_msg))
                 
-                # Set pending feedback for the new AI message
-                st.session_state.pending_feedback = True
-                
             except Exception as e:
                 error_msg = "I encountered an error while processing your request. Please try again."
                 st.session_state.chat_history.append(("AcadGenie", error_msg))
-                st.session_state.pending_feedback = True  # Also require feedback for error messages
                 st.error(f"Error: {str(e)}")
     
     # Display chat history with feedback buttons
@@ -551,10 +654,6 @@ def render_chat_interface():
             # Add feedback buttons only for AcadGenie messages
             if sender == "AcadGenie":
                 render_feedback_buttons(i)
-    
-    # Show pending feedback warning if needed
-    if st.session_state.pending_feedback and st.session_state.temp_feedback["type"] is None:
-        st.warning("⚠️ Please provide feedback on the above response before sending another message.")
 
 def format_ai_message(parsed_response: dict) -> str:
     """Format AI response for display."""
