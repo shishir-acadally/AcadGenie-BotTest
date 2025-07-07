@@ -707,7 +707,7 @@ def render_chat_interface():
         st.markdown(f"**{st.session_state.user_name}** | Grade {st.session_state.user_grade}")
     
     with col2:
-        if st.button("Finish Chat", type="secondary"):
+        if st.button("Save Chat", type="primary"):
             #push feedback to db
             print("==============================Feedback===========================\n\n", st.session_state.feedback_data)
             push_feedback_data()
@@ -728,6 +728,7 @@ def render_chat_interface():
             st.session_state.feedback_locked = []
             st.session_state.pending_feedback_save = {}
             st.rerun()
+        
     with col4:
         if st.button("Start Over", type="secondary"):
             clear_user_session()
@@ -755,6 +756,18 @@ def render_chat_interface():
         # Add user message to display history
         st.session_state.chat_history.append(("You", user_input))
         
+    chat_container = st.container(height=400) 
+    # Display chat history with feedback buttons
+    with chat_container:
+        for i, (sender, message) in enumerate(st.session_state.chat_history):
+            with st.chat_message("user" if sender == "You" else "assistant"):
+                st.markdown(message)
+                
+                # Add feedback buttons only for AcadGenie messages
+                if sender == "AcadGenie":
+                    render_feedback_buttons(i)
+        
+    if user_input:
         with st.spinner("AcadGenie is thinking..."):
             try:
                 # Get response from agent
@@ -769,20 +782,13 @@ def render_chat_interface():
                 
                 # Add to display history
                 st.session_state.chat_history.append(("AcadGenie", formatted_msg))
+                st.rerun()
                 
             except Exception as e:
                 error_msg = "I encountered an error while processing your request. Please try again."
                 st.session_state.chat_history.append(("AcadGenie", error_msg))
                 st.error(f"Error: {str(e)}")
-    
-    # Display chat history with feedback buttons
-    for i, (sender, message) in enumerate(st.session_state.chat_history):
-        with st.chat_message("user" if sender == "You" else "assistant"):
-            st.markdown(message)
-            
-            # Add feedback buttons only for AcadGenie messages
-            if sender == "AcadGenie":
-                render_feedback_buttons(i)
+                st.rerun()
 
 def format_ai_message(parsed_response: dict) -> str:
     """Format AI response for display."""
