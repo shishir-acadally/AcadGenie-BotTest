@@ -3,6 +3,7 @@ import streamlit as st
 import json
 import traceback
 import uuid
+import asyncio
 from typing import TypedDict, Annotated, Any
 from typing_extensions import Annotated
 from langchain_core.messages import AnyMessage, SystemMessage, HumanMessage, AIMessage
@@ -14,21 +15,25 @@ from langchain_core.runnables import RunnableConfig
 from datetime import datetime
 from pymongo import MongoClient
 import os
-from dotenv import load_dotenv
-load_dotenv()
-sys = """
-You are AcadGenie, an expert academic assistant specializing in teaching through highly interactive, guided practice. Your role is to guide learners through complex concepts by breaking them down into small, manageable steps and using a variety of interactive prompts such as multiple-choice questions (MCQs), fill-in-the-blanks (FIBs), and short answers. You do not solve problems outright but help learners solve them through their own thinking, rooted in Socratic questioning, error analysis, and constructivist learning. You adjust the complexity of your responses based on the learner’s grade level and focus on fostering true conceptual clarity and real-world application.
 
-Interaction Flow
+from questions import getQuestions
+load_dotenv()
+
+sys_prompt = """
+You are AcadGenie, an expert academic assistant specializing in teaching through highly interactive, guided practice. Your role is to guide learners through complex concepts by breaking them down into small, manageable steps and using a variety of interactive prompts such as multiple-choice questions (MCQs), fill-in-the-blanks (FIBs), and short answers. You do not solve problems outright but help learners solve them through their own thinking, rooted in Socratic questioning, error analysis, and constructivist learning. You adjust the complexity of your responses and generated questions based on the learner’s grade level and focus on fostering true conceptual clarity and real-world application.
+You work as remediation tutor to help them understand where they are struggling and how to improve their understanding of the concept.
+
+**Interaction Flow**
+
 Evaluate User Input:
-	- If the user's input is not a question, engage in normal conversation: be helpful, supportive, and contextually appropriate.
-	- If the user's input is a question, decompose it into sequential sub-problems or steps (e.g. identifying inputs and methods to use, recalling formulas, applying formulas, etc.).
-	
-Handling Complex Questions:
+	- If the solution to the user's question is fact, definitions, simple statements, etc. , respond with simple explanation enough to make student understand the question with the help of solution.
+	- If the solution to the user's question is a question having any procedure, process, theorem, algorithm, etc. , decompose it into sequential sub-problems or steps (e.g. identifying inputs and methods to use, recalling formulas, applying formulas, etc.).
+
+Decomposing and Handling sequential sub-problems or steps:
 	- For each step, generate an interactive Multiple Choice Question(MCQ) to guide the learner:
 	- Always include plausible options with distractor rationales (DRs) to address common misconceptions.
     - These question stem of MCQs can be of multiple forms like "Fill in the blank", "Short Answer", etc.
-    - Vary the question type across steps to avoid repetition (e.g., don’t use same type of MCQs multiple times for similar steps).
+    - Vary the question type across steps to avoid repetition (e.g., don't use same type of MCQs multiple times for similar steps).
     - Each step question should be in a flow that builds on the previous one, guiding the learner through the concept step by step. One such flow could be: identifying the inputs(if it is not given diretly), recalling the formula, applying the formula, and interpreting the results.
     - If multiple steps are similar to each-other, try combining them into one question.
     
@@ -55,8 +60,9 @@ Tone and Style
 	- Avoid filler praise (e.g., “Great!”) unless tied to specific understanding.
 
 Output Format
-Make sure all the outputs follow below given output structure:
 -When there is not question data, output question_data as empty object e.g. "question_data": { }
+-Make sure all the outputs follow below given output structure:
+
 ```json
 {
   "conversation_message": "Your instructional or feedback message here.",
@@ -73,13 +79,12 @@ Make sure all the outputs follow below given output structure:
     "comment": "Encouraging or clarifying comment tied to understanding.",
   },
   "completed":"True/False according to whether the current question has been completely resolved."
-
 }
 ```
 
 Important Notes
     - Always break down a question based on the learner's grade level.
-	- Adjust the complexity of responses based on the learner's grade level.
+	- Adjust the complexity of generated questions based on the learner's grade level.
 	- Do not repeat the same type of question multiple times for similar steps.
 	- Do not solve any step for the learner; always guide them to think through it.
 	- Provide feedback that is specific and tied to conceptual clarity.
@@ -126,7 +131,7 @@ def prompt(state: State, config: RunnableConfig) -> list[AnyMessage]:
     user_name = config["configurable"].get("user_name", "Student")
     grade = config["configurable"].get("grade", "")
     
-    system_msg = f"{sys} Address the user as {user_name} from grade {grade}."
+    system_msg = f"{sys_prompt} Address the user as {user_name} from grade {grade}."
     
     # Get memory from state
     memory_messages = state.get("memory", [])
@@ -172,8 +177,8 @@ def get_agent_response(user_input: str, config: dict) -> dict:
         # Create agent if not exists
         if "agent" not in st.session_state:
             model = ChatOpenAI(
-                model="o3",
-                # temperature=0.3,
+                model="gpt-4.1",
+                temperature=0.3,
                 api_key=os.environ["OPENAI_API_KEY"]
             )
             checkpointer = InMemorySaver()
@@ -292,13 +297,25 @@ def initialize_session_state():
         "feedback_locked": [],
         "temp_feedback": {"type": None, "reason": ""},
         "show_feedback_summary": False,
-        "pending_feedback_save": {}  # Track which messages have unsaved feedback
+        "pending_feedback_save": {},  # Track which messages have unsaved feedback
+        # New states for question selection
+        "selected_board": "",
+        "selected_grade": "",
+        "selected_subject": "",
+        "available_questions": [],
+        "questions_loaded": False,
+        "loading_questions": False,
+        "selected_question": "",
+        "pending_question": "" 
     }
     
     for key, default_value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = default_value
-   
+
+async def fetch_questions_async(board: str, grade: str, subject: str):
+    """Wrapper to call the async getQuestions function."""
+    return await getQuestions(board, grade, subject)
 
 def save_feedback_session(message_index: int):
     """Update the specific AI message with feedback."""
@@ -412,124 +429,6 @@ def render_feedback_popup(message_index: int):
                 st.rerun()
         
         st.markdown("</div>", unsafe_allow_html=True)
-
-# def render_feedback_buttons(message_index: int):
-#     """Render thumbs up, thumbs down, and save buttons for a message."""
-#     # Check if this message feedback is locked
-#     is_locked = message_index in st.session_state.feedback_locked
-    
-#     if is_locked:
-#         # Show locked feedback state
-#         col1, col2 = st.columns([10, 2])
-#         with col2:
-#             # Get the saved feedback type from feedback_data
-#             # Find corresponding feedback in the data
-#             memory = st.session_state.feedback_data[1]['memory']
-#             ai_message_count = 0
-#             for i in range(message_index + 1):
-#                 if i < len(st.session_state.chat_history):
-#                     sender, _ = st.session_state.chat_history[i]
-#                     if sender == "AcadGenie":
-#                         ai_message_count += 1
-            
-#             # Find the feedback type
-#             feedback_type = None
-#             ai_messages_found = 0
-#             for i in range(len(memory)):
-#                 msg = memory[i]
-#                 if msg.get("type") == "AIMessage":
-#                     ai_messages_found += 1
-#                     if ai_messages_found == ai_message_count:
-#                         feedback_type = msg.get("feedback_type")
-#                         break
-            
-#             if feedback_type == "thumbs_up":
-#                 st.markdown("✅ 👍")
-#             elif feedback_type == "thumbs_down":
-#                 st.markdown("✅ 👎")
-#     else:
-#         # Show interactive feedback buttons
-#         current_selection = st.session_state.pending_feedback_save.get(message_index, {})
-#         feedback_type = current_selection.get("type")
-        
-#         col1, col2, col3, col4 = st.columns([8, 1, 1, 2])
-        
-#         # Determine if feedback has been selected for this message
-#         feedback_selected = feedback_type is not None
-        
-#         with col2:
-#             # Thumbs up button
-#             thumbs_up_pressed = st.button(
-#                 "👍", 
-#                 key=f"thumbs_up_{message_index}", 
-#                 help="This response was helpful"
-#             )
-#             if thumbs_up_pressed:
-#                 set_temp_feedback(message_index, "thumbs_up")
-#                 # Close any open popup
-#                 st.session_state.show_feedback_popup = False
-#                 st.session_state.current_feedback_index = -1
-#                 st.rerun()
-        
-#         with col3:
-#             # Thumbs down button
-#             thumbs_down_pressed = st.button(
-#                 "👎", 
-#                 key=f"thumbs_down_{message_index}", 
-#                 help="This response needs improvement"
-#             )
-#             if thumbs_down_pressed:
-#                 # Toggle popup for this specific message
-#                 if (st.session_state.show_feedback_popup and 
-#                     st.session_state.current_feedback_index == message_index):
-#                     # Close popup if it's already open for this message
-#                     st.session_state.show_feedback_popup = False
-#                     st.session_state.current_feedback_index = -1
-#                 else:
-#                     # Open popup for this message
-#                     st.session_state.show_feedback_popup = True
-#                     st.session_state.current_feedback_index = message_index
-#                     # Initialize thumbs down feedback if not already set
-#                     if feedback_type != "thumbs_down":
-#                         set_temp_feedback(message_index, "thumbs_down", "")
-#                 st.rerun()
-        
-#         with col4:
-#             save_pressed = st.button(
-#                 "💾 Save", 
-#                 key=f"save_feedback_{message_index}",
-#                 disabled=not feedback_selected,
-#                 type="primary" if feedback_selected else "secondary"
-#             )
-#             if save_pressed and feedback_selected:
-#                 # For thumbs down, ensure reason is provided
-#                 if (feedback_type == "thumbs_down" and 
-#                     not current_selection.get("reason", "").strip()):
-#                     st.error("Please provide a reason for thumbs down feedback.")
-#                 else:
-#                     save_feedback_session(message_index)
-#                     # Close popup after saving
-#                     st.session_state.show_feedback_popup = False
-#                     st.session_state.current_feedback_index = -1
-#                     st.success("Feedback saved successfully!")
-#                     st.rerun()
-        
-#         # Show current selection with visual indicators
-#         if feedback_selected:
-#             with col1:
-#                 if feedback_type == "thumbs_up":
-#                     st.markdown("**🔵 Selected:** 👍 Helpful")
-#                 elif feedback_type == "thumbs_down":
-#                     reason = current_selection.get("reason", "")
-#                     if reason:
-#                         st.markdown(f"**🔵 Selected:** 👎 Needs improvement - {reason}...")
-#                     else:
-#                         st.markdown("**🔵 Selected:** 👎 Needs improvement (please add reason)")
-        
-#         # Render the feedback popup RIGHT HERE if it should be shown for this message
-#         if (st.session_state.show_feedback_popup and 
-#             st.session_state.current_feedback_index == message_index):
-#             render_feedback_popup(message_index)
 
 def render_feedback_buttons(message_index: int):
     """Render thumbs up, thumbs down, and save buttons for a message."""
@@ -658,8 +557,164 @@ def render_feedback_buttons(message_index: int):
         if (st.session_state.show_feedback_popup and 
             st.session_state.current_feedback_index == message_index):
             render_feedback_popup(message_index)
-    # If it's not the most recent AI message and not locked, don't show anything
-    
+
+def render_question_selection_sidebar():
+    """Render the question selection sidebar."""
+    with st.sidebar:
+        st.header("📚 Question Selection")
+        
+        # Board selection
+        board = st.selectbox(
+            "Board:",
+            options=["", "CBSE", "ICSE"],
+            index=0,
+            key="board_select"
+        )
+        
+        # Grade selection
+        grade = st.selectbox(
+            "Grade:",
+            options=["", "6", "7", "8", "9", "10"],
+            index=0,
+            key="grade_select"
+        )
+        
+        # Subject selection
+        subject = st.selectbox(
+            "Subject:",
+            options=["", "Mathematics", "Physics", "Chemistry", "Biology"],
+            index=0,
+            key="subject_select"
+        )
+        
+        # Submit button
+        if st.button("🔍 Get Questions", type="primary", key="get_questions_btn"):
+            if board and grade and subject:
+                st.session_state.selected_board = board
+                st.session_state.selected_grade = grade
+                st.session_state.selected_subject = subject
+                st.session_state.loading_questions = True
+                st.session_state.questions_loaded = False
+                st.rerun()
+            else:
+                st.error("Please select board, grade, and subject.")
+        
+        # Show loading state
+        if st.session_state.loading_questions:
+            with st.spinner("Loading questions..."):
+                try:
+                    # Run the async function
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    questions = loop.run_until_complete(
+                        fetch_questions_async(
+                            st.session_state.selected_board,
+                            st.session_state.selected_grade,
+                            st.session_state.selected_subject
+                        )
+                    )
+                    loop.close()
+                    
+                    st.session_state.available_questions = questions or []
+                    st.session_state.questions_loaded = True
+                    st.session_state.loading_questions = False
+                    st.rerun()
+                    
+                except Exception as e:
+                    st.error(f"Error loading questions: {str(e)}")
+                    st.session_state.loading_questions = False
+                    st.rerun()
+        
+        # Show questions dropdown if loaded
+        if st.session_state.questions_loaded and st.session_state.available_questions:
+            st.markdown("---")
+            st.subheader("📝 Available Questions")
+            
+            # Inject custom CSS for styling
+            st.markdown("""
+            <style>
+            .question-correct {
+                border-left: 4px solid #28a745 !important;
+                background-color: #f8fff9 !important;
+                padding: 8px !important;
+                margin: 2px 0 !important;
+                border-radius: 4px !important;
+            }
+            .question-incorrect {
+                border-left: 4px solid #dc3545 !important;
+                background-color: #fff8f8 !important;
+                padding: 8px !important;
+                margin: 2px 0 !important;
+                border-radius: 4px !important;
+            }
+            .question-default {
+                border-left: 4px solid #6c757d !important;
+                background-color: #f8f9fa !important;
+                padding: 8px !important;
+                margin: 2px 0 !important;
+                border-radius: 4px !important;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            # Create options for the selectbox
+            # question_options = ["Select a question..."] + [
+            #     f"Q{i+1}: {q[:50]}..." if len(q) > 50 else f"Q{i+1}: {q}"
+            #     for i, q in enumerate(st.session_state.available_questions)
+            # ]
+            
+            # Create options for the selectbox with color indicators
+            question_options = ["Select a question..."] + [
+                f"{'✅' if q.get('is_correct', False) else '❌'} Q{i+1}: {q.get('question', str(q))[:50]}..." 
+                if len(str(q.get('question', q))) > 50 
+                else f"{'✅' if q.get('is_correct', False) else '❌'} Q{i+1}: {q.get('question', str(q))}"
+                for i, q in enumerate(st.session_state.available_questions)
+            ]
+            
+            selected_question_index = st.selectbox(
+                "Choose a question:",
+                options=range(len(question_options)),
+                format_func=lambda x: question_options[x],
+                key="question_select"
+            )
+            
+            # If a question is selected, handle it
+            if selected_question_index > 0:  # 0 is "Select a question..."
+                actual_index = selected_question_index - 1
+                selected_question = st.session_state.available_questions[actual_index]
+                
+                if st.button("📤 Send Question to Chat", key="send_question_btn"):
+                    # Add the selected question to chat history
+                    # st.session_state.chat_history.append(("You", selected_question))
+                    st.session_state.pending_question = selected_question
+                    # Clear the question selection
+                    st.session_state.selected_question = ""
+                    st.rerun()
+                
+                # Show preview of selected question
+                with st.expander("📖 Question Preview"):
+                    st.write(selected_question)
+        
+        elif st.session_state.questions_loaded and not st.session_state.available_questions:
+            st.warning("No questions found for the selected criteria.")
+        
+        # Show current selection summary if any
+        if st.session_state.selected_board:
+            st.markdown("---")
+            st.markdown("**Current Selection:**")
+            st.markdown(f"🏫 **Board:** {st.session_state.selected_board}")
+            st.markdown(f"📚 **Grade:** {st.session_state.selected_grade}")
+            st.markdown(f"🔬 **Subject:** {st.session_state.selected_subject}")
+            
+            if st.button("🔄 Reset Selection", key="reset_selection_btn"):
+                st.session_state.selected_board = ""
+                st.session_state.selected_grade = ""
+                st.session_state.selected_subject = ""
+                st.session_state.available_questions = []
+                st.session_state.questions_loaded = False
+                st.session_state.loading_questions = False
+                st.rerun()
+
 def render_name_input():
     """Render the name input page."""
     st.title("🤖 AcadGenie")
@@ -734,6 +789,18 @@ def render_chat_interface():
             clear_user_session()
             st.rerun()
     
+    review_role = st.radio(
+        label="Choose your review perspective:",
+        options=["teacher", "student"],
+        index=0,  # Default to "Teacher"
+        key="review_role_select",
+        horizontal=True,  # Display options horizontally
+        # label_visibility="collapsed"  # Hide the label since we have custom text above
+    )   
+    
+    # Store the selected role in session state
+    st.session_state.review_role = review_role
+    
     st.markdown("---")
     
     # Prepare config for agent
@@ -752,6 +819,24 @@ def render_chat_interface():
     # Chat input - always enabled now (feedback is optional)
     user_input = st.chat_input("Type your message here...")
     
+    # Check for pending question from sidebar
+    pending_question = st.session_state.get("pending_question", "")
+    if pending_question:
+        # Process the pending question like regular user input
+        st_chat_input = pending_question
+        st.session_state.pending_question = ""
+
+        if st_chat_input:
+            user_input = f"""Here is a question which I want to understand better using step-by-step reasoning.
+            Along with question, options originally provided with the question, option chosen by student, solution to the provided question is also provided.
+            
+            Question: {st_chat_input['question']}
+            Options: {st_chat_input['options']}
+            Solution: {st_chat_input['solution']}
+            Chosen_Option: {st_chat_input['chosen_option']}.
+            """
+            # Make sure the output is properly formatted. Use inline latex for mathematical expressions and use `\\(` an d `\\)` to enclose it."""
+            
     if user_input:
         # Add user message to display history
         st.session_state.chat_history.append(("You", user_input))
@@ -792,6 +877,8 @@ def render_chat_interface():
 
 def format_ai_message(parsed_response: dict) -> str:
     """Format AI response for display."""
+    
+    selected_role = st.session_state.get('review_role', 'Teacher')
     if isinstance(parsed_response, dict):
         formatted_msg = parsed_response.get("conversation_message", "")
         
@@ -804,10 +891,11 @@ def format_ai_message(parsed_response: dict) -> str:
                 option_letter = option.get('option', '')
                 option_text = option.get('text', '')
                 formatted_msg += f"- {option_letter}: {option_text}\n"
-            
-            formatted_msg += f"\n**Correct Answer:** {question_data.get('correct_answer', '')}"
-            formatted_msg += f"\n**Explanation:** {question_data.get('explanation', '')}"
-            
+        
+            if selected_role == "teacher":  
+                formatted_msg += f"\n**Correct Answer:** {question_data.get('correct_answer', '')}"
+                formatted_msg += f"\n**Explanation:** {question_data.get('explanation', '')}"
+        
             comment = question_data.get('comment')
             if comment:
                 formatted_msg += f"\n**Comment:** {comment}"
@@ -833,6 +921,7 @@ def main():
         render_name_input()
     else:
         initialize_feedback_data()
+        render_question_selection_sidebar()
         render_chat_interface()
 
 if __name__ == "__main__":
