@@ -6,8 +6,10 @@ import uuid
 import asyncio
 from typing import TypedDict, Annotated, Any
 from typing_extensions import Annotated
+from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import AnyMessage, SystemMessage, HumanMessage, AIMessage
 from langchain_openai import ChatOpenAI
+from langchain.output_parsers import PydanticOutputParser
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import create_react_agent
@@ -15,7 +17,9 @@ from langchain_core.runnables import RunnableConfig
 from datetime import datetime
 from pymongo import MongoClient
 import os
-
+from pydantic import BaseModel, Field
+from typing import List
+from langchain_core.prompts import ChatPromptTemplate
 from questions import getQuestions
 load_dotenv()
 
@@ -110,6 +114,24 @@ Important Notes
 """
 
 
+class QuestionOption(BaseModel):
+    option: str = Field(description="Option letter (A, B, C, or D)")
+    text: str = Field(description="The text content of the option")
+    DR: str = Field(description="Distractor rationale - why this might be a common misconception")
+
+class QuestionData(BaseModel):
+    question: str = Field(description="The question text")
+    options: List[QuestionOption] = Field(description="List of 4 answer options")
+    correct_answer: str = Field(description="The correct option letter (A, B, C, or D)")
+    explanation: str = Field(description="Explanation of why the correct answer is right and others are wrong")
+    comment: str = Field(description="Encouraging or clarifying comment tied to understanding")
+
+class AgentOutput(BaseModel):
+    conversation_message: str = Field(description="Instructional or feedback message")
+    question_data: QuestionData = Field(description="The question and related data")
+    completed: str = Field(description="'True' if question is completely resolved, 'False' otherwise")
+
+
 # Define the add_messages function for TypedDict annotation
 def add_messages(left: list, right: list) -> list:
     """Merge two lists of messages."""
@@ -199,11 +221,14 @@ def get_agent_response(user_input: str, config: dict) -> dict:
                 temperature=0.3,
                 api_key=os.environ["OPENAI_API_KEY"]
             )
+            # output_str = AgentOutput.model_json_schema()
+            # structured_llm = model.with_structured_output(output_str)
             checkpointer = InMemorySaver()
             st.session_state.agent = create_react_agent(
                 model=model,
                 prompt=prompt,
                 tools=[],
+                response_format=AgentOutput.model_json_schema(),
                 checkpointer=checkpointer,
             )
         
@@ -215,7 +240,7 @@ def get_agent_response(user_input: str, config: dict) -> dict:
         
         print(f"\n--- Asking Agent (User: {config['configurable'].get('user_name')}) ---")
         print(f"Memory length: {len(st.session_state.agent_memory)}")
-        
+        print("Agent State: ", agent_state)
         # Invoke agent with thread_id for checkpointing
         thread_id = config["configurable"].get("thread_id", str(uuid.uuid4()))
         response = st.session_state.agent.invoke(
@@ -273,24 +298,161 @@ def get_agent_response(user_input: str, config: dict) -> dict:
             'memory': st.session_state.get('agent_memory', [])
         }
 
-def parse_response(response_text: str) -> dict:
-    """Parse agent response - simplified version."""
+# def get_agent_response(user_input: str, config: dict) -> dict:
+#     """Get response from the agent with proper memory management."""
+#     try:
+#         # Initialize agent memory in session state if not exists
+#         if "agent_memory" not in st.session_state:
+#             st.session_state.agent_memory = []
+        
+#         # Add user message to memory
+#         user_message = HumanMessage(content=user_input, name="user")
+#         st.session_state.agent_memory.append(user_message)
+        
+#         # Add user message to feedback_data immediately
+#         st.session_state.feedback_data[1]['memory'].append({
+#             "content": user_input,
+#             "name": 'user',
+#             "type": "HumanMessage"
+#         })
+        
+#         # Create agent if not exists
+#         if "agent" not in st.session_state:
+#             model = ChatOpenAI(
+#                 model="gpt-4o-mini",  # Changed from gpt-4.1 to available model
+#                 temperature=0.3,
+#                 api_key=os.environ["OPENAI_API_KEY"]
+#             )
+#             schema_json = AgentOutput.model_json_schema()
+#             structured_llm = model.with_structured_output(schema_json)
+#             checkpointer = MemorySaver()
+#             user_name = config["configurable"].get("user_name", "Student")
+#             grade = config["configurable"].get("grade", "")
+#             agent_prompt = ChatPromptTemplate.from_messages([
+#                 ("system", sys_prompt + f" Address the user as {user_name} from grade {grade}."),
+#                 ("placeholder", ),
+#             ])
+            
+#             st.session_state.agent = create_react_agent(
+#                 model=structured_llm,
+#                 prompt=agent_prompt,
+#                 checkpointer=checkpointer,
+#             )
+        
+#         print(f"\n--- Asking Agent (User: {config['configurable'].get('user_name')}) ---")
+#         print(f"Memory length: {len(st.session_state.agent_memory)}")
+        
+#         # Invoke agent with thread_id for checkpointing
+#         thread_id = config["configurable"].get("thread_id", str(uuid.uuid4()))
+#         response = st.session_state.agent.invoke(
+#             {"messages": st.session_state.agent_memory}, 
+#             {"configurable": {
+#                 **config["configurable"], 
+#                 "thread_id": thread_id,
+#                 "user_name": config["configurable"].get("user_name", "Student"),
+#                 "grade": config["configurable"].get("grade", "")
+#             }}
+#         )
+        
+#         # Extract AI message from response
+#         messages = response.get('messages', [])
+#         ai_message = None
+        
+#         for msg in reversed(messages):
+#             if isinstance(msg, AIMessage):
+#                 if hasattr(msg.content, 'dict'):  # Structured output
+#                     ai_message = msg.content
+#                 else:
+#                     ai_message = msg.content
+#                 break
+        
+#         if not ai_message:
+#             ai_message = "I'm sorry, I couldn't generate a response. Please try again."
+        
+#         # Add AI message to memory
+#         ai_message_obj = AIMessage(content=ai_message, name="acadgenie")
+#         st.session_state.agent_memory.append(ai_message_obj)
+        
+#         # Add AI message to feedback_data immediately (without feedback initially)
+#         st.session_state.feedback_data[1]['memory'].append({
+#             "content": ai_message,
+#             "name": 'acadgenie',
+#             "type": "AIMessage",
+#             "feedback_type": None,  # Will be updated when user provides feedback
+#             "feedback_reason": None
+#         })
+        
+#         # Limit memory size (keep last 20 messages = 10 conversations)
+#         if len(st.session_state.agent_memory) > 20:
+#             st.session_state.agent_memory = st.session_state.agent_memory[-20:]
+#             # Also limit feedback_data memory
+#             if len(st.session_state.feedback_data[1]['memory']) > 20:
+#                 st.session_state.feedback_data[1]['memory'] = st.session_state.feedback_data[1]['memory'][-20:]
+        
+#         print(f"Agent responded. Memory now has {len(st.session_state.agent_memory)} messages")
+#         print(f"Feedback data memory now has {len(st.session_state.feedback_data[1]['memory'])} messages")
+        
+#         return {
+#             'human_message': user_input,
+#             'acadgenie': ai_message,
+#             'memory': st.session_state.agent_memory
+#         }
+        
+#     except Exception as e:
+#         print(f"Error in get_agent_response: {e}")
+#         print(traceback.format_exc())
+#         return {
+#             'human_message': user_input,
+#             'acadgenie': "I encountered an error while processing your request. Please try again.",
+#             'memory': st.session_state.get('agent_memory', [])
+#         }
+
+# def parse_response(response_text: str) -> dict:
+#     """Parse agent response - simplified version."""
+#     if isinstance(response_text, dict):
+#         return response_text
+    
+#     # Try to extract JSON if present
+#     try:
+#         first_bracket = response_text.find('{')
+#         end_bracket = response_text.rfind('}')
+#         if first_bracket != -1 and end_bracket != -1:
+#             json_str = response_text[first_bracket:end_bracket + 1]
+#             return json.loads(json_str)
+#     except:
+#         pass
+    
+#     # Return as simple conversation message
+#     return {
+#         "conversation_message": response_text
+#     }
+
+def parse_response(response_text) -> dict:
+    """Parse agent response - handles both structured and unstructured responses."""
+    # If it's already a structured AgentOutput object
+    if hasattr(response_text, 'dict'):
+        return response_text.dict()
+    
+    # If it's already a dict
     if isinstance(response_text, dict):
         return response_text
     
-    # Try to extract JSON if present
+    # Try to extract JSON if present in string
     try:
-        first_bracket = response_text.find('{')
-        end_bracket = response_text.rfind('}')
+        response_str = str(response_text)
+        first_bracket = response_str.find('{')
+        end_bracket = response_str.rfind('}')
         if first_bracket != -1 and end_bracket != -1:
-            json_str = response_text[first_bracket:end_bracket + 1]
+            json_str = response_str[first_bracket:end_bracket + 1]
             return json.loads(json_str)
     except:
         pass
     
     # Return as simple conversation message
     return {
-        "conversation_message": response_text
+        "conversation_message": str(response_text),
+        "question_data": {},
+        "completed": "False"
     }
 
 def clear_user_session():
