@@ -566,7 +566,7 @@ def render_inline_feedback_buttons(message_index: int):
         feedback_selected = feedback_type is not None
 
         # Compact horizontal layout
-        col1, col2, col3, col4 = st.columns([1, 1, 2, 8])
+        col1, col2, col3, col4 = st.columns([1, 1, 1, 15])
 
         with col1:
             thumbs_up_pressed = st.button("👍",
@@ -791,228 +791,179 @@ def render_name_input():
 
 def render_chat_interface():
     """Render the main chat interface."""
-    # Simple CSS for fixed input bar at bottom
-    st.markdown("""
-    <style>
-    /* Main container adjustments */
-    .main .block-container {
-        padding-bottom: 150px !important; /* Space for fixed input */
-        max-width: 100% !important;
-    }
+    colspace1, main, colspace2 = st.columns([1,4,1])
+    with colspace1:
+        pass
 
-    /* Chat message styling */
-    .stChatMessage[data-testid="user-message"] {
-        justify-content: flex-end !important;
-        margin-left: 25% !important;
-    }
-
-    .stChatMessage[data-testid="assistant-message"] {
-        justify-content: flex-start !important;
-        margin-right: 25% !important;
-    }
-
-    .stChatMessage[data-testid="user-message"] .stMarkdown {
-        background: #007bff !important;
-        color: white !important;
-        padding: 10px 15px !important;
-        border-radius: 15px 15px 5px 15px !important;
-    }
-
-    .stChatMessage[data-testid="assistant-message"] .stMarkdown {
-        background: #f1f3f4 !important;
-        color: #333 !important;
-        padding: 10px 15px !important;
-        border-radius: 15px 15px 15px 5px !important;
-    }
-
-    /* Fixed input area */
-    # .fixed-bottom {
-    #     position: fixed !important;
-    #     bottom: 0 !important;
-    #     left: 0 !important;
-    #     right: 0 !important;
-    #     background: white !important;
-    #     padding: 20px !important;
-    #     border-top: 1px solid #ddd !important;
-    #     z-index: 1000 !important;
-    #     box-shadow: 0 -2px 10px rgba(0,0,0,0.1) !important;
-    # }
-
-    .feedback-container {
-        margin-top: 0.5rem;
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-    # Control bar
-    col1, col2 = st.columns([2, 13])
-    with col1:
-        review_role = st.selectbox("View:",
-                                   options=["teacher", "student"],
-                                   index=1,
-                                   key="review_role_select",
-                                   label_visibility='collapsed')
-        st.session_state.review_role = review_role
-
-    # Prepare config for agent
-    config = {
-        "configurable": {
-            "user_name": st.session_state.user_name,
-            "grade": st.session_state.user_grade,
-            "thread_id": st.session_state.thread_id
-        }
-    }
-
-    # Check for unsaved feedback warning
-    if has_unsaved_feedback():
-        st.info("💡 You have unsaved feedback. Save it before continuing or it will be lost.")
-
-    # Handle pending question from sidebar
-    pending_question = st.session_state.get("pending_question", "")
-    user_input = None
-    
-    if pending_question:
-        st.session_state.pending_question = ""
-        user_input = f"""Here is a question which I want to understand better using step-by-step reasoning.
-        Along with question, options originally provided with the question, option chosen by student, solution to the provided question is also provided.
-
-        Question: {pending_question['question']}
-        Options: {pending_question['options']}
-        Solution: {pending_question['solution']}
-        Chosen_Option: {pending_question['chosen_option']}.
-        """
-
-        
-        
-    # === CHAT DISPLAY AREA (Scrollable) ===
-    st.markdown("### 🤖 AcadGenie Chat")
-    # st.markdown(
-    #     """
-    # <style>
-    #     .st-emotion-cache-9ajs8n {
-    #         flex-direction: row-reverse;
-    #         text-align: right;
-    #     }
-    # </style>
-    # """,
-    #     unsafe_allow_html=True,
-    # )
-    
-    CSS = """
-        .stChatMessage:has([data-testid="stChatMessageAvatarUser"]) {
+    with main:
+        st.markdown("""
+        <style>
+        .feedback-container {
+            margin-top: 0.5rem;
             display: flex;
-            flex-direction: row-reverse;
-            align-itmes: end;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # Control bar
+        col1, col2 = st.columns([2, 13])
+        with col1:
+            review_role = st.selectbox("View:",
+                                    options=["teacher", "student"],
+                                    index=["teacher", "student"].index(st.session_state.get("review_role", "student")),
+                                    key="review_role_select",
+                                    label_visibility='collapsed')
+            
+        if st.session_state.get("review_role", None) != review_role:
+            st.session_state.review_role = review_role
+            st.rerun()
+
+        # Prepare config for agent
+        config = {
+            "configurable": {
+                "user_name": st.session_state.user_name,
+                "grade": st.session_state.user_grade,
+                "thread_id": st.session_state.thread_id
+            }
         }
 
-        [data-testid="stChatMessageAvatarUser"] + [data-testid="stChatMessageContent"] {
-            text-align: right;
-        }
-        """
-    st.html(f"<style>{CSS}</style>")
+        # Check for unsaved feedback warning
+        if has_unsaved_feedback():
+            st.info("💡 You have unsaved feedback. Save it before continuing or it will be lost.")
+
+        # Handle pending question from sidebar
+        pending_question = st.session_state.get("pending_question", "")
+        user_input = None
+        
+        if pending_question:
+            st.session_state.pending_question = ""
+            user_input = f"""Here is a question which I want to understand better using step-by-step reasoning.
+            Along with question, options originally provided with the question, option chosen by student, solution to the provided question is also provided.
+
+            Question: {pending_question['question']}
+            Options: {pending_question['options']}
+            Solution: {pending_question['solution']}
+            Chosen_Option: {pending_question['chosen_option']}.
+            """
+
+            
+            
+        # === CHAT DISPLAY AREA (Scrollable) ===
+        st.markdown("### 🤖 AcadGenie Chat")
+        
+        CSS = """
+            .stChatMessage:has([data-testid="stChatMessageAvatarUser"]) {
+                display: flex;
+                flex-direction: row-reverse;
+                align-itmes: end;
+            }
+
+            [data-testid="stChatMessageAvatarUser"] + [data-testid="stChatMessageContent"] {
+                text-align: right;
+            }
+            """
+        st.html(f"<style>{CSS}</style>")
+
+        # === FIXED INPUT AREA (Bottom of screen) ===
+        # Create a container that will be positioned fixed
+        with bottom():
+            input_container = st.container()
+            with input_container:
+                st.markdown('<div class="fixed-bottom">', unsafe_allow_html=True)
+                
+                # Input row
+                a1, input_col, button_col, a2 = st.columns([1, 3.33, 0.67, 1])
+                
+                with input_col:
+                    if not user_input:
+                        user_input = st.chat_input("Type your message here...", key="chat_input")
+                
+                with button_col:
+                    # Action buttons in a row
+                    btn1, btn2, btn3 = st.columns(3)
+                    
+                    with btn1:
+                        save_btn = st.button("💾", help="Save chat", key="save_btn")
+                    
+                    with btn2:
+                        clear_btn = st.button("🗑️", help="Clear chat", key="clear_btn")
+                    
+                    with btn3:
+                        reset_btn = st.button("🔄", help="Reset", key="reset_btn")
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+
+        # Handle button actions
+        if save_btn:
+            print("Saving feedback data...")
+            push_feedback_data()
+            st.session_state.chat_history = []
+            st.session_state.agent_memory = []
+            st.session_state.feedback_locked = []
+            st.session_state.feedback_data = []
+            st.session_state.pending_feedback_save = {}
+            st.rerun()
+
+        if clear_btn:
+            st.session_state.chat_history = []
+            st.session_state.agent_memory = []
+            st.session_state.feedback_data = []
+            st.session_state.feedback_locked = []
+            st.session_state.pending_feedback_save = {}
+            st.rerun()
+
+        if reset_btn:
+            clear_user_session()
+            st.rerun()
+
+        # Handle user input
+        if user_input:
+            # Add user message to chat
+            st.session_state.chat_history.append(("You", user_input))
+            
+        for i, (sender, message) in enumerate(st.session_state.chat_history):
+            if sender == "You":
+                with st.chat_message("user"):
+                    st.markdown(message)
+            else:  # AcadGenie
+                with st.chat_message("assistant"):
+                    st.markdown(message)
+                    # Add feedback buttons for AcadGenie messages
+                    render_inline_feedback_buttons(i)
+
+        if user_input:
+            with st.spinner("AcadGenie is thinking..."):
+                try:
+                    # Get response from agent
+                    result = get_agent_response(user_input, config)
+                    ai_response = result.get("acadgenie", "I'm not sure how to respond!")
+                    parsed_response = parse_response(ai_response)
+                    
+                    # Format message for display
+                    formatted_msg = format_ai_message(parsed_response)
+                    
+                    # Add to chat history
+                    st.session_state.chat_history.append(("AcadGenie", formatted_msg))
+                    st.rerun()
+
+                except Exception as e:
+                    error_msg = "I encountered an error while processing your request. Please try again."
+                    st.session_state.chat_history.append(("AcadGenie", error_msg))
+                    st.error(f"Error: {str(e)}")
+                    st.rerun()
     
-    # Display chat messages
-    for i, (sender, message) in enumerate(st.session_state.chat_history):
-        if sender == "You":
-            with st.chat_message("user"):
-                st.markdown(message)
-        else:  # AcadGenie
-            with st.chat_message("assistant"):
-                st.markdown(message)
-                # Add feedback buttons for AcadGenie messages
-                render_inline_feedback_buttons(i)
-
-    # === FIXED INPUT AREA (Bottom of screen) ===
-    # Create a container that will be positioned fixed
-    with bottom():
-        input_container = st.container()
-        with input_container:
-            st.markdown('<div class="fixed-bottom">', unsafe_allow_html=True)
-            
-            # Input row
-            input_col, button_col = st.columns([6, 2])
-            
-            with input_col:
-                if not user_input:
-                    user_input = st.chat_input("Type your message here...", key="chat_input")
-            
-            with button_col:
-                # Action buttons in a row
-                btn1, btn2, btn3 = st.columns(3)
-                
-                with btn1:
-                    save_btn = st.button("💾", help="Save chat", key="save_btn")
-                
-                with btn2:
-                    clear_btn = st.button("🗑️", help="Clear chat", key="clear_btn")
-                
-                with btn3:
-                    reset_btn = st.button("🔄", help="Reset", key="reset_btn")
-            
-            st.markdown('</div>', unsafe_allow_html=True)
-
-    # Handle button actions
-    if save_btn:
-        print("Saving feedback data...")
-        push_feedback_data()
-        st.session_state.chat_history = []
-        st.session_state.agent_memory = []
-        st.session_state.feedback_locked = []
-        st.session_state.feedback_data = []
-        st.session_state.pending_feedback_save = {}
-        st.rerun()
-
-    if clear_btn:
-        st.session_state.chat_history = []
-        st.session_state.agent_memory = []
-        st.session_state.feedback_data = []
-        st.session_state.feedback_locked = []
-        st.session_state.pending_feedback_save = {}
-        st.rerun()
-
-    if reset_btn:
-        clear_user_session()
-        st.rerun()
-
-    # Handle user input
-    if user_input:
-        # Add user message to chat
-        st.session_state.chat_history.append(("You", user_input))
-
-        with st.spinner("AcadGenie is thinking..."):
-            try:
-                # Get response from agent
-                result = get_agent_response(user_input, config)
-                ai_response = result.get("acadgenie", "I'm not sure how to respond!")
-                parsed_response = parse_response(ai_response)
-                
-                # Format message for display
-                formatted_msg = format_ai_message(parsed_response)
-                
-                # Add to chat history
-                st.session_state.chat_history.append(("AcadGenie", formatted_msg))
-                st.rerun()
-
-            except Exception as e:
-                error_msg = "I encountered an error while processing your request. Please try again."
-                st.session_state.chat_history.append(("AcadGenie", error_msg))
-                st.error(f"Error: {str(e)}")
-                st.rerun()
+    with colspace2:
+        pass
 
 def format_ai_message(parsed_response: dict) -> str:
     """Format AI response for display."""
     print('Response from Bot: ', type(parsed_response), '\n\n', parsed_response)
-    selected_role = st.session_state.get('review_role', 'teacher')
+    selected_role = st.session_state.get('review_role', 'student')
     formatted_msg =""
     if isinstance(parsed_response, dict):
         convo = parsed_response.get("message", "")
-        # if isinstance(parse_response(convo), dict):
-        #     parsed_response = convo
-        #     formatted_msg += parsed_response.get("conversation_message", "")
-        # else:
         formatted_msg += convo
 
         # Handle structured question data if present
@@ -1026,8 +977,8 @@ def format_ai_message(parsed_response: dict) -> str:
                 formatted_msg += f"- {option_letter}: {option_text}\n"
 
             if selected_role == "teacher":
-                formatted_msg += f"\n**Correct Answer:** {question_data.get('correct_answer', '')}"
-                formatted_msg += f"\n**Explanation:** {question_data.get('explanation', '')}"
+                formatted_msg += f"\n**Correct Answer:** {question_data.get('correct_answer', '')}\n"
+                formatted_msg += f"\n**Explanation:** {question_data.get('explanation', '')}\n"
 
             comment = question_data.get('feedback_comment')
             if comment:
