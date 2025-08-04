@@ -261,7 +261,6 @@ def get_agent_response(user_input: list, config: dict) -> dict:
             f"\n--- Asking Agent (User: {config['configurable'].get('user_name')}) ---"
         )
         print(f"Memory length: {len(st.session_state.agent_memory)}")
-        print("Agent State: ", agent_state)
         # Invoke agent with thread_id for checkpointing
         thread_id = config["configurable"].get("thread_id", str(uuid.uuid4()))
         response = st.session_state.agent.invoke(agent_state, {
@@ -972,7 +971,7 @@ def render_chat_interface():
                 with st.chat_message("user"):
                     for msg in message:
                         if msg.get("type") == "text":
-                            st.markdown(msg.get("content", ""))
+                            st.markdown(msg.get("text", ""))
                         elif msg.get("type") == "image_url":
                             st.image(msg.get("image_url", {}).get("url", ""), width=200)
                     # st.markdown(message.get("content", ""))
