@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from typing import List
 from langchain_core.prompts import ChatPromptTemplate
 from questions import getQuestions
+import base64
 
 load_dotenv()
 
@@ -212,7 +213,7 @@ def initialize_feedback_data():
         st.session_state.feedback_data = [session_info, {"memory": []}]
 
 
-def get_agent_response(user_input: str, config: dict) -> dict:
+def get_agent_response(user_input: list, config: dict) -> dict:
     """Get response from the agent with proper memory management."""
     try:
         # Initialize agent memory in session state if not exists
@@ -282,7 +283,7 @@ def get_agent_response(user_input: str, config: dict) -> dict:
             ai_message = "I'm sorry, I couldn't generate a response. Please try again."
 
         # Add AI message to memory
-        ai_message_obj = AIMessage(content=ai_message, name="acadgenie")
+        ai_message_obj = AIMessage(content=[{"type": "text", "content": ai_message}], name="acadgenie")
         st.session_state.agent_memory.append(ai_message_obj)
 
         # Add AI message to feedback_data immediately (without feedback initially)
@@ -327,7 +328,7 @@ def get_agent_response(user_input: str, config: dict) -> dict:
         return {
             'human_message': user_input,
             'acadgenie':
-            "I encountered an error while processing your request. Please try again.",
+            None,
             'memory': st.session_state.get('agent_memory', [])
         }
 
@@ -789,9 +790,21 @@ def render_name_input():
                 if not grade:
                     st.error("Please select your grade.")
 
+def convert_file_to_base64(file_content: bytes) -> str:
+    """
+    Encodes file content (bytes) into a Base64 string.
+    
+    Args:
+        file_content: The binary content of the file.
+        
+    Returns:
+        A Base64 encoded string.
+    """
+    return base64.b64encode(file_content).decode('utf-8')
+
 def render_chat_interface():
     """Render the main chat interface."""
-    colspace1, main, colspace2 = st.columns([1,4,1])
+    colspace1, main, colspace2 = st.columns([0.2,5.6,0.2])
     with colspace1:
         pass
 
@@ -808,6 +821,8 @@ def render_chat_interface():
         """, unsafe_allow_html=True)
         
         # Control bar
+        st.markdown("### 🤖 AcadGenie Chat")
+        
         col1, col2 = st.columns([2, 13])
         with col1:
             review_role = st.selectbox("View:",
@@ -851,7 +866,6 @@ def render_chat_interface():
             
             
         # === CHAT DISPLAY AREA (Scrollable) ===
-        st.markdown("### 🤖 AcadGenie Chat")
         
         CSS = """
             .stChatMessage:has([data-testid="stChatMessageAvatarUser"]) {
@@ -874,12 +888,12 @@ def render_chat_interface():
                 st.markdown('<div class="fixed-bottom">', unsafe_allow_html=True)
                 
                 # Input row
-                a1, input_col, button_col, a2 = st.columns([1, 3.33, 0.67, 1])
+                a1, input_col, button_col, a2 = st.columns([0.2, 4.75, 0.85, 0.2])
                 
                 with input_col:
                     if not user_input:
-                        user_input = st.chat_input("Type your message here...", key="chat_input")
-                
+                        user_input = st.chat_input("Type your message here...", key="chat_input", accept_file='multiple', file_type= ["jpg", "jpeg", "png"])
+                       
                 with button_col:
                     # Action buttons in a row
                     btn1, btn2, btn3 = st.columns(3)
@@ -919,38 +933,79 @@ def render_chat_interface():
             st.rerun()
 
         # Handle user input
+        user_input_content = []
         if user_input:
             # Add user message to chat
-            st.session_state.chat_history.append(("You", user_input))
+            user_input_content.append({"type": "text", "text": user_input.get("text")})
+            # st.session_state.chat_history.append(("user", [{"type": "text", "content": user_input}, {"type"}]))
             
+            if user_input.get('files'):
+                # Iterate through the list of uploaded files from the chat input
+                for uploaded_file in user_input['files']:
+                    st.write(f"Processing file: **{uploaded_file.name}**")
+                    
+                    try:
+                        # The uploaded file object contains the file content.
+                        # Use .read() to get the binary content of the file.
+                        file_content = uploaded_file.read()
+                        
+                        # Convert the binary content to a Base64 string using our helper function
+                        base64_string = convert_file_to_base64(file_content)
+                        
+                        # Store the result in our dictionary
+                        # base64_encoded_files[uploaded_file.name] = base64_string
+                        user_input_content.append({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_string}",
+                                "detail": "auto"
+                                },
+                        })
+
+                    except Exception as e:
+                        st.error(f"Could not process file {uploaded_file.name}. Error: {e}")
+
+            st.session_state.chat_history.append(("user", user_input_content))
+
         for i, (sender, message) in enumerate(st.session_state.chat_history):
-            if sender == "You":
+            if sender == "user":
                 with st.chat_message("user"):
-                    st.markdown(message)
+                    for msg in message:
+                        if msg.get("type") == "text":
+                            st.markdown(msg.get("content", ""))
+                        elif msg.get("type") == "image_url":
+                            st.image(msg.get("image_url", {}).get("url", ""), width=200)
+                    # st.markdown(message.get("content", ""))
+
             else:  # AcadGenie
                 with st.chat_message("assistant"):
-                    st.markdown(message)
+                    if message.get("type") == "text":
+                        st.markdown(message.get("content", {}))
+                    elif message.get("type") == "image_url":
+                        st.image(message.get("image_url", {}).get("url", ""), width=200)
+                    # st.markdown(message.get("content", ""))
                     # Add feedback buttons for AcadGenie messages
                     render_inline_feedback_buttons(i)
 
-        if user_input:
+        if user_input_content:
             with st.spinner("AcadGenie is thinking..."):
                 try:
                     # Get response from agent
-                    result = get_agent_response(user_input, config)
+                    result = get_agent_response(user_input_content, config)
                     ai_response = result.get("acadgenie", "I'm not sure how to respond!")
-                    parsed_response = parse_response(ai_response)
+                    if ai_response:
+                        parsed_response = parse_response(ai_response)
                     
-                    # Format message for display
-                    formatted_msg = format_ai_message(parsed_response)
-                    
-                    # Add to chat history
-                    st.session_state.chat_history.append(("AcadGenie", formatted_msg))
-                    st.rerun()
+                        # Format message for display
+                        formatted_msg = format_ai_message(parsed_response)
+                        
+                        # Add to chat history
+                        st.session_state.chat_history.append(("AcadGenie", {"type": "text", "content": formatted_msg}))
+                    st.rerun()  
 
                 except Exception as e:
                     error_msg = "I encountered an error while processing your request. Please try again."
-                    st.session_state.chat_history.append(("AcadGenie", error_msg))
+                    st.session_state.chat_history.append(("AcadGenie", {"type": "text", "content": error_msg}))
                     st.error(f"Error: {str(e)}")
                     st.rerun()
     
