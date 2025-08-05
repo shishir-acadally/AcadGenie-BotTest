@@ -351,14 +351,12 @@ def parse_response(response_text) -> dict:
             json_str = response_str[first_bracket:end_bracket + 1]
             return json.loads(json_str)
     except:
-        pass
-
-    # Return as simple conversation message
-    return {
-        "message": str(response_text),
-        "question_data": {},
-        "completed": "False"
-    }
+        # Return as simple conversation message
+        return {
+            "message": response_text,
+            "question_data": {},
+            "completed": "False"
+        }
 
 
 def clear_user_session():
