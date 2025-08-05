@@ -353,7 +353,7 @@ def parse_response(response_text) -> dict:
     except:
         # Return as simple conversation message
         return {
-            "message": response_text,
+            "message": "Proper formatting not found.",
             "question_data": {},
             "completed": "False"
         }
@@ -1031,7 +1031,9 @@ def format_ai_message(parsed_response: dict) -> str:
             for option in question_data.get('options', []):
                 option_letter = option.get('option', '')
                 option_text = option.get('text', '')
-                formatted_msg += f"- {option_letter}: {option_text}\n"
+                if selected_role == "teacher":
+                    option_dr = option.get('DR', False)
+                formatted_msg += f"- {option_letter}: {option_text} | DR: {option_dr}\n" if selected_role == "teacher" else f"- {option_letter}: {option_text}\n"
 
             if selected_role == "teacher":
                 formatted_msg += f"\n**Correct Answer:** {question_data.get('correct_answer', '')}\n"
