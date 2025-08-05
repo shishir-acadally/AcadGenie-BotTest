@@ -7,10 +7,8 @@ import asyncio
 from streamlit_extras.bottom_container import bottom
 from typing import TypedDict, Annotated, Any
 from typing_extensions import Annotated
-from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import AnyMessage, SystemMessage, HumanMessage, AIMessage
 from langchain_openai import ChatOpenAI
-from langchain.output_parsers import PydanticOutputParser
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import create_react_agent
@@ -20,7 +18,6 @@ from pymongo import MongoClient
 import os
 from pydantic import BaseModel, Field
 from typing import List
-from langchain_core.prompts import ChatPromptTemplate
 from questions import getQuestions
 import base64
 
@@ -238,7 +235,7 @@ def get_agent_response(user_input: list, config: dict) -> dict:
         if "agent" not in st.session_state:
             model = ChatOpenAI(model="gpt-4.1",
                                temperature=0.3,
-                               api_key=os.environ["OPENAI_API_KEY"])
+                            )
             # output_str = AgentOutput.model_json_schema()
             # structured_llm = model.with_structured_output(output_str)
             checkpointer = InMemorySaver()
@@ -322,14 +319,17 @@ def get_agent_response(user_input: list, config: dict) -> dict:
         }
 
     except Exception as e:
-        print(f"Error in get_agent_response: {e}")
+        print(f"Error in get_agent_response: {type(e).__name__} -> {e}")
         print(traceback.format_exc())
-        return {
-            'human_message': user_input,
-            'acadgenie':
-            None,
-            'memory': st.session_state.get('agent_memory', [])
-        }
+        if type(e).__name__ == "RateLimitError":
+            st.error(
+                "Rate limit exceeded. Please wait a moment and try again.")
+        else:
+            return {
+                'human_message': user_input,
+                'acadgenie': {"message": "I'm sorry, I couldn't generate a response. Please try again."},
+                'memory': st.session_state.get('agent_memory', [])
+            }
 
 
 def parse_response(response_text) -> dict:
@@ -934,35 +934,40 @@ def render_chat_interface():
         # Handle user input
         user_input_content = []
         if user_input:
-            # Add user message to chat
-            user_input_content.append({"type": "text", "text": user_input.get("text")})
-            # st.session_state.chat_history.append(("user", [{"type": "text", "content": user_input}, {"type"}]))
-            
-            if user_input.get('files'):
-                # Iterate through the list of uploaded files from the chat input
-                for uploaded_file in user_input['files']:
-                    st.write(f"Processing file: **{uploaded_file.name}**")
-                    
-                    try:
-                        # The uploaded file object contains the file content.
-                        # Use .read() to get the binary content of the file.
-                        file_content = uploaded_file.read()
+            if isinstance(user_input, str):
+                # If user input is a string, convert it to a list of messages
+                user_input_content.append({"type": "text", "text": user_input})
+                
+            elif isinstance(user_input, st.elements.widgets.chat.ChatInputValue):
+                # Add user message to chat
+                user_input_content.append({"type": "text", "text": user_input.get("text")})
+                # st.session_state.chat_history.append(("user", [{"type": "text", "content": user_input}, {"type"}]))
+                
+                if user_input.get('files'):
+                    # Iterate through the list of uploaded files from the chat input
+                    for uploaded_file in user_input['files']:
+                        st.write(f"Processing file: **{uploaded_file.name}**")
                         
-                        # Convert the binary content to a Base64 string using our helper function
-                        base64_string = convert_file_to_base64(file_content)
-                        
-                        # Store the result in our dictionary
-                        # base64_encoded_files[uploaded_file.name] = base64_string
-                        user_input_content.append({
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_string}",
-                                "detail": "auto"
-                                },
-                        })
+                        try:
+                            # The uploaded file object contains the file content.
+                            # Use .read() to get the binary content of the file.
+                            file_content = uploaded_file.read()
+                            
+                            # Convert the binary content to a Base64 string using our helper function
+                            base64_string = convert_file_to_base64(file_content)
+                            
+                            # Store the result in our dictionary
+                            # base64_encoded_files[uploaded_file.name] = base64_string
+                            user_input_content.append({
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{base64_string}",
+                                    "detail": "auto"
+                                    },
+                            })
 
-                    except Exception as e:
-                        st.error(f"Could not process file {uploaded_file.name}. Error: {e}")
+                        except Exception as e:
+                            st.error(f"Could not process file {uploaded_file.name}. Error: {e}")
 
             st.session_state.chat_history.append(("user", user_input_content))
 

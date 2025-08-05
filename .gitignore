@@ -4,6 +4,4 @@
 __pycache__
 # Logs
 logs
-.venv/
-.streamlit
-HF_Space
+botEnv/
