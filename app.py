@@ -355,7 +355,7 @@ def parse_response(response_text) -> dict:
 
     # Return as simple conversation message
     return {
-        "conversation_message": str(response_text),
+        "message": str(response_text),
         "question_data": {},
         "completed": "False"
     }
